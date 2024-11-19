@@ -1,0 +1,49 @@
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
+import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.concurrent.CompletableFuture;
+
+@Service
+public class SoapClientService {
+
+    private final ExternalServicePort externalServicePort;
+
+    @Autowired
+    public SoapClientService(ExternalServicePort externalServicePort) {
+        this.externalServicePort = externalServicePort;
+    }
+
+    @CircuitBreaker(name = "CircuitBreakerService")
+    public String circuitBreakerCall() {
+        return externalServicePort.callExternalService();
+    }
+
+    @Retry(name = "retryService", fallbackMethod = "fallbackAfterRetry")
+    public String retryCall() {
+        return externalServicePort.callExternalService();
+    }
+
+    public String fallbackAfterRetry(Exception ex) {
+        return "All retries have been exhausted.";
+    }
+
+    @TimeLimiter(name = "timeLimiterService")
+    public CompletableFuture<String> timeLimiterCall() {
+        return CompletableFuture.supplyAsync(externalServicePort::callExternalServiceWithDelay);
+    }
+
+    @Bulkhead(name = "bulkheadService")
+    public String bulkheadCall() {
+        return externalServicePort.callExternalService();
+    }
+
+    @RateLimiter(name = "rateLimiterService")
+    public String rateLimiterCall() {
+        return externalServicePort.callExternalService();
+    }
+}
