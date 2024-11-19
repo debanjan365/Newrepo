@@ -1,0 +1,123 @@
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.retry.RetryRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.bulkhead.BulkheadRegistry;
+import io.github.resilience4j.timelimiter.TimeLimiterRegistry;
+import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@SpringBootTest
+class SoapClientServiceTest {
+
+    private ExternalServicePort externalServicePort;
+    private SoapClientService soapClientService;
+
+    @BeforeEach
+    public void setUp() {
+        externalServicePort = mock(ExternalServicePort.class);
+        soapClientService = new SoapClientService(externalServicePort);
+
+        // Initialize Resilience4j components if needed
+        CircuitBreakerRegistry circuitBreakerRegistry = CircuitBreakerRegistry.ofDefaults();
+        RetryRegistry retryRegistry = RetryRegistry.ofDefaults();
+        BulkheadRegistry bulkheadRegistry = BulkheadRegistry.ofDefaults();
+        TimeLimiterRegistry timeLimiterRegistry = TimeLimiterRegistry.ofDefaults();
+        RateLimiterRegistry rateLimiterRegistry = RateLimiterRegistry.ofDefaults();
+    }
+
+    @Test
+    public void testCircuitBreakerCall() {
+        when(externalServicePort.callExternalService()).thenThrow(new RuntimeException("Service Unavailable"));
+
+        assertThrows(RuntimeException.class, () -> soapClientService.circuitBreakerCall());
+
+        // Simulate Circuit Breaker Open State
+        assertThrows(CallNotPermittedException.class, () -> soapClientService.circuitBreakerCall());
+
+        // Reset the behavior for recovery simulation
+        when(externalServicePort.callExternalService()).thenReturn("Success");
+
+        // Attempt recovery
+        String result = soapClientService.circuitBreakerCall();
+        assertEquals("Success", result);
+    }
+
+    @Test
+    public void testRetryCall() {
+        when(externalServicePort.callExternalService())
+            .thenThrow(new RuntimeException("Service Error"))
+            .thenThrow(new RuntimeException("Service Error"))
+            .thenReturn("Success");
+
+        String result = soapClientService.retryCall();
+        assertEquals("Success", result);
+
+        // Verify that the method was called 3 times
+        verify(externalServicePort, times(3)).callExternalService();
+    }
+
+    @Test
+    public void testTimeLimiterCall() {
+        when(externalServicePort.callExternalServiceWithDelay()).thenAnswer(invocation -> {
+            Thread.sleep(3000); // Simulate delay
+            return "Success";
+        });
+
+        CompletableFuture<String> future = soapClientService.timeLimiterCall();
+
+        ExecutionException exception = assertThrows(ExecutionException.class, future::get);
+        assertTrue(exception.getCause() instanceof java.util.concurrent.TimeoutException);
+    }
+
+    @Test
+    public void testBulkheadCall() {
+        when(externalServicePort.callExternalService()).thenReturn("Success");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(5);
+        CountDownLatch latch = new CountDownLatch(5);
+        Map<Integer, String> results = new ConcurrentHashMap<>();
+
+        // Simulate multiple concurrent calls
+        for (int i = 0; i < 5; i++) {
+            final int index = i;
+            executorService.submit(() -> {
+                try {
+                    results.put(index, soapClientService.bulkheadCall());
+                } catch (Exception ex) {
+                    results.put(index, ex.getClass().getSimpleName());
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        latch.await();
+        executorService.shutdown();
+
+        // Check that no more than the configured concurrent calls succeeded
+        long successCount = results.values().stream().filter("Success"::equals).count();
+        assertTrue(successCount <= 3);
+    }
+
+    @Test
+    public void testRateLimiterCall() {
+        when(externalServicePort.callExternalService()).thenReturn("Success");
+
+        IntStream.range(0, 10).forEach(i -> {
+            if (i < 5) {
+                assertEquals("Success", soapClientService.rateLimiterCall());
+            } else {
+                assertThrows(RequestNotPermitted.class, () -> soapClientService.rateLimiterCall());
+            }
+        });
+    }
+}
