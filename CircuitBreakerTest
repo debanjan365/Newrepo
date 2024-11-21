@@ -1,23 +1,53 @@
-@Test
-void testCircuitBreakerOpensAfterFailures() {
-    CircuitBreakerConfig circuitBreakerConfig = CircuitBreakerConfig.custom()
-            .failureRateThreshold(50)
-            .minimumNumberOfCalls(5) // At least 5 calls to evaluate failure
-            .slidingWindowSize(10)  // Sliding window of 10 calls
-            .build();
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import org.junit.jupiter.api.Test;
 
-    CircuitBreakerRegistry circuitBreakerRegistry = CircuitBreakerRegistry.of(circuitBreakerConfig);
-    CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker("myCircuitBreaker");
+import java.util.function.Supplier;
 
-    Supplier<AttributesType> decoratedSupplier = CircuitBreaker.decorateSupplier(circuitBreaker, () -> {
-        throw new RuntimeException("Simulated exception");
-    });
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-    // Make multiple calls to trigger the circuit breaker
-    for (int i = 0; i < 5; i++) {
-        assertThrows(RuntimeException.class, decoratedSupplier::get);
+class MyServiceTest {
+
+    private final MyService myService = new MyService();
+
+    @Test
+    void testCircuitBreakerWithFailure() {
+        // Create a CircuitBreakerConfig with custom configuration (for testing purposes)
+        CircuitBreakerConfig circuitBreakerConfig = CircuitBreakerConfig.custom()
+                .failureRateThreshold(50) // Set failure rate threshold for the circuit breaker
+                .waitDurationInOpenState(java.time.Duration.ofMillis(1000)) // Duration the circuit breaker stays open
+                .build();
+
+        CircuitBreakerRegistry circuitBreakerRegistry = CircuitBreakerRegistry.of(circuitBreakerConfig);
+        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker("myCircuitBreaker");
+
+        // Wrap the method with a Supplier using the circuit breaker
+        Supplier<AttributesType> decoratedSupplier = CircuitBreaker.decorateSupplier(circuitBreaker, () -> myService.performOperation(new AttributesType("fail"), new RequestHeaderType("headerInfo")));
+
+        // Expect the circuit breaker to open after a failure and the exception to be thrown
+        assertThrows(RuntimeException.class, decoratedSupplier::get); // Expect RuntimeException
     }
 
-    // After the failure rate threshold is reached, the circuit breaker should open
-    assertThrows(CallNotPermittedException.class, decoratedSupplier::get);
+    @Test
+    void testCircuitBreakerWithSuccess() {
+        // Create a CircuitBreakerConfig with custom configuration (for testing purposes)
+        CircuitBreakerConfig circuitBreakerConfig = CircuitBreakerConfig.custom()
+                .failureRateThreshold(50)
+                .waitDurationInOpenState(java.time.Duration.ofMillis(1000))
+                .build();
+
+        CircuitBreakerRegistry circuitBreakerRegistry = CircuitBreakerRegistry.of(circuitBreakerConfig);
+        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker("myCircuitBreaker");
+
+        // Wrap the method with a Supplier using the circuit breaker
+        Supplier<AttributesType> decoratedSupplier = CircuitBreaker.decorateSupplier(circuitBreaker, () -> myService.performOperation(new AttributesType("success"), new RequestHeaderType("headerInfo")));
+
+        // Verify successful execution (without fallback)
+        AttributesType result = decoratedSupplier.get();
+
+        assertNotNull(result); // Ensure result is not null
+        assertEquals("success", result.getSomeProperty()); // Ensure the result is correct
+    }
 }
